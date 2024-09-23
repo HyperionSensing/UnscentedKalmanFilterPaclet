@@ -54,7 +54,7 @@ UKFSmoother::usage =
 Begin["`Private`"]
 
 
-(* ::Section:: *)
+(* ::Section::Closed:: *)
 (*Manifolds*)
 
 
@@ -86,7 +86,7 @@ CircleMinus::undefined = "`1`";
 CircleMinus::undefined = "`1`";
 
 
-(* ::Section:: *)
+(* ::Section::Closed:: *)
 (*Sigma Points*)
 
 
@@ -134,50 +134,6 @@ UKFSigmaPointsCrossCovariance[{\[Sigma]sx_, wsx_}, {\[Sigma]sz_, wsz_}, \[Mu]X_,
 
 UKFSigmaPointsMap[f_, {\[Sigma]s_, ws_}]:= {f/@ \[Sigma]s, ws}
 
-(* Generate sigma points for the UKF *)
-generateSigmaPoints[{t_, \[Mu]_, P_}, \[CapitalDelta]_List] := Module[
-  {n, L, xVec, sigmaPointsVec, sigmaPoints},
-  
-  If[!PositiveSemidefiniteMatrixQ[P], Abort[]];
-  L = CholeskyDecomposition[3 P]; (* Mathematica returns an _upper_ triangular matrix for L. This is what we want anyway, since we want to map across the columns of the lower triangular transpose.*)
-
-  {
-     \[Mu] \[CirclePlus] \[CapitalDelta],
-     \[Mu] \[CirclePlus] (\[CapitalDelta] + #) & /@ L // Splice,
-     \[Mu] \[CirclePlus] (\[CapitalDelta] - #) & /@ L // Splice
-  }
-]
-
-generateSigmaPoints[state:{t_, \[Mu]_, P_}] := generateSigmaPoints[state, ConstantArray[0, manifoldDimension[\[Mu]]]];
-
-sigmaPointsMean[\[Sigma]s_] := Module[{n = (Length[\[Sigma]s] - 1)/2, weights,w\[Sigma]s},
-	weights = 1/3  {3 - n, Splice@ConstantArray[1/2, 2 n]};
-	w\[Sigma]s = Length[\[Sigma]s] * weights * \[Sigma]s; (* Weighted \[Sigma]s.  Multiply by Length so we can use Mean below *)
-
-	FixedPoint[
-		\[Mu]i |-> \[Mu]i \[CirclePlus] Mean[(# \[CircleMinus] \[Mu]i) &/@ w\[Sigma]s], (* Using total instead of mean hangs? *)
-		First[w\[Sigma]s], 
-		SameTest -> (Norm[N[#1-#2]] < 1*^-6 &)
-	]
-];
-
-sigmaPointsCovariance[\[Sigma]s_, \[Mu]_] := Module[{n = (Length[\[Sigma]s] - 1)/2, D, weights},
-	weights = 1/3  {3 - n, Splice@ConstantArray[1/2, 2 n]};
-	
-	D = Transpose[(# \[CircleMinus] \[Mu]) & /@ \[Sigma]s];
-	
-	D . (weights * D\[Transpose])
-]
-
-sigmaPointsCrossCovariance[\[Sigma]s_, z_, \[Mu]X_, \[Mu]Z_] := Module[{n = (Length[\[Sigma]s] - 1)/2, D, E, weights},
-	weights = 1/3  {3 - n, Splice@ConstantArray[1/2, 2 n]};
-	D = Transpose[(# \[CircleMinus] \[Mu]X) & /@ \[Sigma]s]; 
-	E = Transpose[(# \[CircleMinus] \[Mu]Z )& /@ z];
-	
-   D . (weights * E\[Transpose])
-]
-
-applyDelta[{t_, x_, P_}, \[CapitalDelta]_]:= sigmaPointsMean[generateSigmaPoints[{t, x, P}, \[CapitalDelta]]]
 
 
 (* ::Section:: *)
@@ -198,26 +154,26 @@ measurementTime[{t_, __}] := t
 
 (* UKF Predict Step *)
 UKFPredict[state:{t_?NumericQ, x_List, P_List}, \[CapitalDelta]t_?NumericQ, system:{f_, h_, Q_, R_}] := Module[{f\[Sigma]s, \[Mu], \[CapitalSigma]},
-	f\[Sigma]s = OperatorApplied[f][\[CapitalDelta]t] /@ generateSigmaPoints[state]; (* Transformed sigma points *)
-	\[Mu] = sigmaPointsMean[f\[Sigma]s]; (* transformed mean *)
-	\[CapitalSigma] = makeHermitian[sigmaPointsCovariance[f\[Sigma]s, \[Mu]] + Q]; (* transformed covariance *)
+	f\[Sigma]s = UKFSigmaPointsMap[f[#, \[CapitalDelta]t] &, UKFSigmaPoints[state]]; (* Transformed sigma points *)
+	\[Mu] = UKFSigmaPointsMean[f\[Sigma]s]; (* transformed mean *)
+	\[CapitalSigma] = makeHermitian[UKFSigmaPointsCovariance[f\[Sigma]s, \[Mu]] + Q]; (* transformed covariance *)
 	{t + \[CapitalDelta]t, \[Mu], \[CapitalSigma]}
 ];
 UKFPredict[\[CapitalDelta]t_?NumericQ, system:{f_, h_, Q_, R_}][state_]:= UKFPredict[state, \[CapitalDelta]t, system];
 
 (* UKF Update Step *)
 UKFUpdate[state:{t_, x_, P_}, measurement:{_, z_}, system:{f_, h_, Q_, R_}] := Module[{\[Sigma]s, h\[Sigma]s, h\[Mu], S, covXZ, K},
-	\[Sigma]s = generateSigmaPoints[state];
-	h\[Sigma]s = h /@ \[Sigma]s;
-	h\[Mu] = sigmaPointsMean[h\[Sigma]s];
-	S = sigmaPointsCovariance[h\[Sigma]s, h\[Mu]] + R; (* Total innovation (real measurement - estimated measurement) variance . *)
-	covXZ = sigmaPointsCrossCovariance[\[Sigma]s, h\[Sigma]s, x, h\[Mu]]; (* This is roughly how much covariance in the innovation variance is due to state variance *)
+	\[Sigma]s = UKFSigmaPoints[state];
+	h\[Sigma]s = UKFSigmaPointsMap[h, \[Sigma]s];
+	h\[Mu] = UKFSigmaPointsMean[h\[Sigma]s];
+	S = UKFSigmaPointsCovariance[h\[Sigma]s, h\[Mu]] + R; (* Total innovation (real measurement - estimated measurement) variance . *)
+	covXZ = UKFSigmaPointsCrossCovariance[\[Sigma]s, h\[Sigma]s, x, h\[Mu]]; (* This is roughly how much covariance in the innovation variance is due to state variance *)
 	K = covXZ . Inverse[S]; (* Kalman Gain. Intuitively, it weights the innovation by how much of the innovation variance is due to state variance. *)
 	(* TODO: Reject outliers? *)
 	
 	{
 		t, 
-		applyDelta[state, K . (z - h\[Mu])],
+		UKFSigmaPointsMean@UKFSigmaPoints[state, K . (z - h\[Mu])],
 		makeHermitian[P - K . S . K\[Transpose]]
 	}
 ]
@@ -258,16 +214,16 @@ UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system:{f_, h_, Q_, R
 (* Could be optimized by saving the sigma points from the forward pass!*)
 UKFBackwardsUpdate[state:{t1_, x_, P_}, nextState:{t2_, \[DoubleStruckX]_, \[DoubleStruckCapitalP]_}, system:{f_, h_, Q_, R_}]:=Module[{\[Sigma]s, f\[Sigma]s, f\[Mu], covXZ, S, C, F, \[CapitalDelta]t},
 	\[CapitalDelta]t = t2 - t1;
-	\[Sigma]s = generateSigmaPoints[state]; 
-	f\[Sigma]s = OperatorApplied[f][\[CapitalDelta]t] /@ \[Sigma]s;
-	f\[Mu] = sigmaPointsMean[f\[Sigma]s];
-	S = sigmaPointsCovariance[f\[Sigma]s, f\[Mu]] + Q;
-	covXZ = sigmaPointsCrossCovariance[\[Sigma]s, f\[Sigma]s, x, f\[Mu]];
+	\[Sigma]s = UKFSigmaPoints[state]; 
+	f\[Sigma]s = UKFSigmaPointsMap[f[#, \[CapitalDelta]t] &, \[Sigma]s];
+	f\[Mu] = UKFSigmaPointsMean[f\[Sigma]s];
+	S = UKFSigmaPointsCovariance[f\[Sigma]s, f\[Mu]] + Q;
+	covXZ = UKFSigmaPointsCrossCovariance[\[Sigma]s, f\[Sigma]s, x, f\[Mu]];
 	C = covXZ . Inverse[S];
 	
 	{
 	    t1,
-		applyDelta[state, C . (\[DoubleStruckX] - f\[Mu])],
+		UKFSigmaPointsMean@UKFSigmaPoints[state, C . (\[DoubleStruckX] - f\[Mu])],
 		makeHermitian[P + C . (\[DoubleStruckCapitalP] - S) . C\[Transpose]]
 	}
 ];
