@@ -6,6 +6,30 @@
 
 BeginPackage["UnscentedKalmanFilter`"]
 
+
+(* ::Subsection:: *)
+(*Sigma Points*)
+
+
+UKFSigmaPoints::usage = "
+UKFSigmaPoints[{___, \[Mu], P}, \[CapitalDelta], \[Kappa]] generates {sigma points, weights} using constant \[Kappa] for a probability distribution with mean \[Mu] and covariance P, after shifting it by \[CapitalDelta]. \[Mu] must be a list and P a matrix. 
+UKFSigmaPoints[{___, \[Mu], P}, \[CapitalDelta]] := generates {sigma points, weights} for a probability distribution with mean \[Mu] and covariance P with \[Kappa] chosen automatically to match some of the forth moments of the input distribution, assuming it is guassian.
+UKFSigmaPoints[{___, \[Mu], P}] generates {sigma points, weights} where \[CapitalDelta] is the zero vector.
+";
+
+UKFSigmaPointsMean::usage = "UKFSigmaPointsMean[sigmaPoints] calculates the estimated mean of the distribution approximated by a set of sigma points.";
+
+UKFSigmaPointsCovariance::usage = "UKFSigmaPointsCovariance[sigmaPoints, \[Mu]] calculates the estimated covariance of the distribution approximated by a set of sigma points relative to the mean \[Mu]";
+
+UKFSigmaPointsCrossCovariance::usage = "UKFSigmaPointsCrossCovariance[sigmaPointsX, sigmaPointsY, \[Mu]X, \[Mu]Y] calculates the estimated cross covariance of the distribution approximated by a two sets of sigma points";
+
+UKFSigmaPointsMap::usage = "UKFSigmaPointsMap[f, sigmaPoints] maps a function f over the set of sigma points";
+
+
+(* ::Subsection:: *)
+(*Filtering & Smoothing*)
+
+
 UKFPredict::usage = 
 "UKFPredict[state, system] performs the prediction step of the Unscented Kalman Filter (UKF). \
 The argument 'state' is a list {x, P}, where x is the current state estimate and P is the current state covariance matrix. \
@@ -66,12 +90,56 @@ CircleMinus::undefined = "`1`";
 (*Sigma Points*)
 
 
+(* ::Text:: *)
+(* Note that the original paper I followed (https://www.dfki.de/fileadmin/user_upload/import/10296_hertzberg_infus_11.pdf  to have a mistake in its sigma-point generation.  For example, it doesn't predict the mean of the square of a normal variable correctly!*)
+
+
+UKFSigmaPoints[{___, \[Mu]_, P:{{__?NumericQ}..}}, \[CapitalDelta]:{__?NumericQ}, \[Kappa]_?NumericQ] := Module[
+  {n, L, xVec, sigmaPointsVec, sigmaPoints, weights, \[Sigma]s},
+  n = manifoldDimension[\[Mu]];
+  
+  If[!PositiveSemidefiniteMatrixQ[P], Abort[]];
+  L = CholeskyDecomposition[3 P]; (* Mathematica returns an _upper_ triangular matrix for L. This is what we want anyway, since we want to map across the columns of the lower triangular transpose.*)
+
+  weights = {\[Kappa]/(n + \[Kappa])} ~Join~ ConstantArray[(1/2)/(n + \[Kappa]), 2 n]; 
+  \[Sigma]s = {
+     \[Mu] \[CirclePlus] \[CapitalDelta],
+     \[Mu] \[CirclePlus] (\[CapitalDelta] + #) & /@ L // Splice,
+     \[Mu] \[CirclePlus] (\[CapitalDelta] - #) & /@ L // Splice
+  };
+  
+  {\[Sigma]s, weights}
+]
+
+defaultSigmaPointK[{___, \[Mu]_, P_}] := 3 - manifoldDimension[\[Mu]] (* n + k = 3 is optimal given a normal distribution. See https://people.eecs.berkeley.edu/~pabbeel/cs287-fa19/optreadings/JulierUhlmann-UKF.pdf *)
+UKFSigmaPoints[s_, \[CapitalDelta]:{__?NumericQ}] := UKFSigmaPoints[s, \[CapitalDelta], defaultSigmaPointK[s]] 
+UKFSigmaPoints[s:{___, \[Mu]_, P_}] := UKFSigmaPoints[s, ConstantArray[0, manifoldDimension[\[Mu]]], defaultSigmaPointK[s]]
+
+UKFSigmaPointsMean[{\[Sigma]s_, ws_}] := With[{w\[Sigma]s = Length[\[Sigma]s] * ws * \[Sigma]s (* Weighted \[Sigma]s.  Multiply by Length so we can use Mean below *) },	
+	FixedPoint[
+		\[Mu]i |-> \[Mu]i \[CirclePlus] Mean[(# \[CircleMinus] \[Mu]i) &/@ w\[Sigma]s], (* Using total instead of mean hangs? *)
+		First[w\[Sigma]s], 
+		SameTest -> (Norm[N[#1-#2]] < 1*^-6 &)
+	]
+]
+
+UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}, \[Mu]_] := UKFSigmaPointsCrossCovariance[{\[Sigma]s, ws}, {\[Sigma]s, ws}, \[Mu], \[Mu]]
+
+UKFSigmaPointsCrossCovariance[{\[Sigma]sx_, wsx_}, {\[Sigma]sz_, wsz_}, \[Mu]X_, \[Mu]Z_] := With[{
+		D = Transpose[\[Sqrt]wsx Map[(# \[CircleMinus] \[Mu]X) &, \[Sigma]sx]],
+		E = Transpose[\[Sqrt]wsz Map[(# \[CircleMinus] \[Mu]Z) &, \[Sigma]sz]]
+	},
+	D . E\[Transpose]
+]
+
+UKFSigmaPointsMap[f_, {\[Sigma]s_, ws_}]:= {f/@ \[Sigma]s, ws}
+
 (* Generate sigma points for the UKF *)
-generateSigmaPoints[{t_, \[Mu]_,  P_}, \[CapitalDelta]_List] := Module[
+generateSigmaPoints[{t_, \[Mu]_, P_}, \[CapitalDelta]_List] := Module[
   {n, L, xVec, sigmaPointsVec, sigmaPoints},
   
   If[!PositiveSemidefiniteMatrixQ[P], Abort[]];
-  L = CholeskyDecomposition[P]; (* Mathematica returns an _upper_ triangular matrix for L. This is what we want anyway, since we want to map across the columns of the lower triangular transpose.*)
+  L = CholeskyDecomposition[3 P]; (* Mathematica returns an _upper_ triangular matrix for L. This is what we want anyway, since we want to map across the columns of the lower triangular transpose.*)
 
   {
      \[Mu] \[CirclePlus] \[CapitalDelta],
@@ -82,27 +150,31 @@ generateSigmaPoints[{t_, \[Mu]_,  P_}, \[CapitalDelta]_List] := Module[
 
 generateSigmaPoints[state:{t_, \[Mu]_, P_}] := generateSigmaPoints[state, ConstantArray[0, manifoldDimension[\[Mu]]]];
 
-sigmaPointsMean[\[Sigma]s_] := FixedPoint[
-	\[Mu]i |-> \[Mu]i \[CirclePlus] Mean[(# \[CircleMinus] \[Mu]i) &/@ \[Sigma]s], 
-	First[\[Sigma]s], 
-	SameTest -> (Norm[N[#1-#2]] < 1*^-6 &)
-	];
+sigmaPointsMean[\[Sigma]s_] := Module[{n = (Length[\[Sigma]s] - 1)/2, weights,w\[Sigma]s},
+	weights = 1/3  {3 - n, Splice@ConstantArray[1/2, 2 n]};
+	w\[Sigma]s = Length[\[Sigma]s] * weights * \[Sigma]s; (* Weighted \[Sigma]s.  Multiply by Length so we can use Mean below *)
 
-sigmaPointsCovariance[\[Sigma]s_, \[Mu]_] := With[
-	{
-		D = Transpose[(# \[CircleMinus] \[Mu]) & /@ \[Sigma]s]
-	},
+	FixedPoint[
+		\[Mu]i |-> \[Mu]i \[CirclePlus] Mean[(# \[CircleMinus] \[Mu]i) &/@ w\[Sigma]s], (* Using total instead of mean hangs? *)
+		First[w\[Sigma]s], 
+		SameTest -> (Norm[N[#1-#2]] < 1*^-6 &)
+	]
+];
+
+sigmaPointsCovariance[\[Sigma]s_, \[Mu]_] := Module[{n = (Length[\[Sigma]s] - 1)/2, D, weights},
+	weights = 1/3  {3 - n, Splice@ConstantArray[1/2, 2 n]};
 	
-   1/2 D . D\[Transpose]
+	D = Transpose[(# \[CircleMinus] \[Mu]) & /@ \[Sigma]s];
+	
+	D . (weights * D\[Transpose])
 ]
 
-sigmaPointsCrossCovariance[\[Sigma]s_, z_, \[Mu]X_, \[Mu]Z_] := With[
-	{
-		D = Transpose[(# \[CircleMinus] \[Mu]X) & /@ \[Sigma]s], 
-		E = Transpose[(# \[CircleMinus] \[Mu]Z )& /@ z]
-	},
+sigmaPointsCrossCovariance[\[Sigma]s_, z_, \[Mu]X_, \[Mu]Z_] := Module[{n = (Length[\[Sigma]s] - 1)/2, D, E, weights},
+	weights = 1/3  {3 - n, Splice@ConstantArray[1/2, 2 n]};
+	D = Transpose[(# \[CircleMinus] \[Mu]X) & /@ \[Sigma]s]; 
+	E = Transpose[(# \[CircleMinus] \[Mu]Z )& /@ z];
 	
-   1/2 D . E\[Transpose]
+   D . (weights * E\[Transpose])
 ]
 
 applyDelta[{t_, x_, P_}, \[CapitalDelta]_]:= sigmaPointsMean[generateSigmaPoints[{t, x, P}, \[CapitalDelta]]]
@@ -213,6 +285,14 @@ UKFSmoother[initialEstimate:{t_, x_, P_}, measurements:{__}, system:{f_, h_, Q_,
    
    Reverse[backwardPass]
 ]
+
+
+(* ::Section:: *)
+(*Parameter Estimation*)
+
+
+(* ::Text:: *)
+(*Estimate the parameters of the filter using expectation maximization*)
 
 
 (* ::Section:: *)
