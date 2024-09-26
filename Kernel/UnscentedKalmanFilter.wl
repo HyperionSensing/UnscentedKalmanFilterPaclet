@@ -33,22 +33,22 @@ UKFSigmaPointsMap::usage = "UKFSigmaPointsMap[f, sigmaPoints] maps a function f 
 UKFPredict::usage = 
 "UKFPredict[state, system] performs the prediction step of the Unscented Kalman Filter (UKF). \
 The argument 'state' is a list {x, P}, where x is the current state estimate and P is the current state covariance matrix. \
-The argument 'system' is a list {f, h, Q, R}, where f[\[CapitalDelta]t, state] is the process model function (state transition function), h is the measurement model function (included for consistency), Q is the process noise covariance matrix, and R is the measurement noise covariance matrix (included for consistency).";
+The argument 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t] is the process model function (state transition function), h is the measurement model function (included for consistency), Q is the process noise covariance matrix, and R is the measurement noise covariance matrix (included for consistency).";
 
 UKFUpdate::usage = 
 "UKFUpdate[state, z, system] performs the update step of the Unscented Kalman Filter (UKF). \
 The argument 'state' is a list {x, P}, where x is the predicted state estimate and P is the predicted state covariance matrix. \
-'z' is the measurement vector of the form {time, {__}}. 'system' is a list {f, h, Q, R}, where f[\[CapitalDelta]t, state] is the process model function (included for consistency), h is the measurement model function, Q is the process noise covariance matrix (included for consistency), and R is the measurement noise covariance matrix.";
+'z' is the measurement vector of the form {time, {__}}. 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t] is the process model function (included for consistency), h is the measurement model function, Q is the process noise covariance matrix (included for consistency), and R is the measurement noise covariance matrix.";
 
 UKFFilter::usage = 
 "UKFFilter[initialEstimate, measurements, system] performs Unscented Kalman Filtering (UKF) to estimate the state of a dynamic system over time. \
 'initialEstimate' is a list {x, P}, where x is the initial state estimate vector and P is the initial state covariance matrix. \
-'measurements' is a list of observed measurement vectors. 'system' is a list {f, h, Q, R}, where f[\[CapitalDelta]t, state] is the state transition function, h is the measurement function, Q is the process noise covariance matrix, and R is the measurement noise covariance matrix.";
+'measurements' is a list of observed measurement vectors. 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t] is the state transition function, h is the measurement function, Q is the process noise covariance matrix, and R is the measurement noise covariance matrix.";
 
 UKFSmoother::usage = 
 "UKFSmoother[initialEstimate, measurements, system] performs both forward Unscented Kalman Filtering (UKF) and backward smoothing using the Rauch-Tung-Striebel (RTS) smoother algorithm. \
 'initialEstimate' is a list {x, P}, where x is the initial state estimate vector and P is the initial state covariance matrix. \
-'measurements' is a list of observed measurement vectors of the form {time, {__}}. 'system' is a list {f, h, Q, R}, where f[\[CapitalDelta]t, state] is the state transition function, h is the measurement function, Q is the process noise covariance matrix, and R is the measurement noise covariance matrix.";
+'measurements' is a list of observed measurement vectors of the form {time, {__}}. 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t]f[ is the state transition function, h is the measurement function, Q is the process noise covariance matrix, and R is the measurement noise covariance matrix.";
 
 
 Begin["`Private`"]
@@ -86,7 +86,7 @@ CircleMinus::undefined = "`1`";
 CircleMinus::undefined = "`1`";
 
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*Sigma Points*)
 
 
@@ -173,7 +173,7 @@ UKFUpdate[state:{t_, x_, P_}, measurement:{_, z_}, system:{f_, h_, Q_, R_}] := M
 	
 	{
 		t, 
-		UKFSigmaPointsMean@UKFSigmaPoints[state, K . (z - h\[Mu])],
+		UKFSigmaPointsMean@UKFSigmaPoints[state, (* \[CapitalDelta]: *) K . (z - h\[Mu])],
 		makeHermitian[P - K . S . K\[Transpose]]
 	}
 ]
