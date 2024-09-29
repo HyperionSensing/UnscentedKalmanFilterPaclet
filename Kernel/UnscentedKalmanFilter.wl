@@ -257,9 +257,9 @@ UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system_?UKFSystemQ] :
    ];
    
    (* If subsequent states have the timestamp, take just the last *)
-   (*   dropInterimStates[states_]:=*)
+   dropInterimStates[states_] := Last/@SplitBy[states, stateTime];
    
-   <|"System" -> system, "FilteredStates" -> results|>
+   <|"System" -> system, "FilteredStates" -> dropInterimStates[results]|>
 ]
 UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}][system_?UKFSystemQ] := UKFFilter[initialEstimate, measurements, system];
 
