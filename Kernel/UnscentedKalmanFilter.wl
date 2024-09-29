@@ -27,28 +27,51 @@ UKFSigmaPointsMap::usage = "UKFSigmaPointsMap[f, sigmaPoints] maps a function f 
 
 
 (* ::Subsection:: *)
-(*Filtering & Smoothing*)
+(*System*)
+
+
+UKFSystemQ::usage = "UKFSystemQ[association] returns true if association is a valid UKF system. A valid system must have ProcessModel, MeasurementModel, ProcessNoise, and MeasurementNoise keys.  ProcessModel, i.e. f[state, \[CapitalDelta]t], is the process model function. MeasurementModel, i.e. h[state] is the measurement model function.  processNoise and measurementNoise must be covariance matrices";
+
+UKFFilterResultsQ::usage = "UKFFilterResultsQ[association] returns true if association is a valid result returned by UKFFilter";
+
+UKFSmootherResultsQ::usage = "UKFSmootherResultsQ[association] returns true if association is a valid result returned by UKFFilter";
+
+
+(* ::Subsection:: *)
+(*Update & Prediction*)
 
 
 UKFPredict::usage = 
 "UKFPredict[state, system] performs the prediction step of the Unscented Kalman Filter (UKF). \
 The argument 'state' is a list {x, P}, where x is the current state estimate and P is the current state covariance matrix. \
-The argument 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t] is the process model function (state transition function), h is the measurement model function (included for consistency), Q is the process noise covariance matrix, and R is the measurement noise covariance matrix (included for consistency).";
+The argument 'system' is a UKFSystem, see UKFSystemQ";
 
 UKFUpdate::usage = 
 "UKFUpdate[state, z, system] performs the update step of the Unscented Kalman Filter (UKF). \
 The argument 'state' is a list {x, P}, where x is the predicted state estimate and P is the predicted state covariance matrix. \
-'z' is the measurement vector of the form {time, {__}}. 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t] is the process model function (included for consistency), h is the measurement model function, Q is the process noise covariance matrix (included for consistency), and R is the measurement noise covariance matrix.";
+'z' is the measurement vector of the form {time, {__}}. 
+The argument 'system' is a UKFSystem, see UKFSystemQ.";
+
+UKFBackwardsUpdate::usage = 
+"UKFBackwardsUpdate[state, subsequentState, system] updates a state conditioned only on previous data given the subsequent state that is conditioned on all data. This is used in the RTS algorithm."
+
+
+(* ::Subsection:: *)
+(*Filtering & Smoothing*)
+
+
 
 UKFFilter::usage = 
 "UKFFilter[initialEstimate, measurements, system] performs Unscented Kalman Filtering (UKF) to estimate the state of a dynamic system over time. \
 'initialEstimate' is a list {x, P}, where x is the initial state estimate vector and P is the initial state covariance matrix. \
-'measurements' is a list of observed measurement vectors. 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t] is the state transition function, h is the measurement function, Q is the process noise covariance matrix, and R is the measurement noise covariance matrix.";
+'measurements' is a list of observed measurement vectors. 
+The argument 'system' is a UKFSystem, see UKFSystemQ.";
 
 UKFSmoother::usage = 
 "UKFSmoother[initialEstimate, measurements, system] performs both forward Unscented Kalman Filtering (UKF) and backward smoothing using the Rauch-Tung-Striebel (RTS) smoother algorithm. \
 'initialEstimate' is a list {x, P}, where x is the initial state estimate vector and P is the initial state covariance matrix. \
-'measurements' is a list of observed measurement vectors of the form {time, {__}}. 'system' is a list {f, h, Q, R}, where f[state, \[CapitalDelta]t]f[ is the state transition function, h is the measurement function, Q is the process noise covariance matrix, and R is the measurement noise covariance matrix.";
+'measurements' is a list of observed measurement vectors of the form {time, {__}}. 
+The argument 'system' is a UKFSystem, see UKFSystemQ";
 
 
 Begin["`Private`"]
@@ -86,7 +109,7 @@ CircleMinus::undefined = "`1`";
 CircleMinus::undefined = "`1`";
 
 
-(* ::Section:: *)
+(* ::Section::Closed:: *)
 (*Sigma Points*)
 
 
@@ -136,7 +159,7 @@ UKFSigmaPointsMap[f_, {\[Sigma]s_, ws_}]:= {f/@ \[Sigma]s, ws}
 
 
 
-(* ::Section:: *)
+(* ::Section::Closed:: *)
 (*Helpers*)
 
 
@@ -149,20 +172,57 @@ measurementTime[{t_, __}] := t
 
 
 (* ::Section:: *)
+(*Types*)
+
+
+UKFSystemQ[system_?AssociationQ] := With[{requiredKeys = {
+     "ProcessModel",
+     "MeasurementModel",
+     "ProcessNoise",
+     "MeasurementNoise"
+     }},
+  SubsetQ[requiredKeys, Keys[system]] &&
+  MatchQ[system["ProcessNoise"], {{__?NumericQ}..}] &&
+  MatchQ[system["MeasurementNoise"], {{__?NumericQ}..}]
+]
+
+
+UKFFilterResultsQ[assoc_?AssociationQ] := With[{requiredKeys = {
+     "System",
+     "FilteredStates"
+     }},
+  SubsetQ[requiredKeys, Keys[assoc]]
+]
+
+
+UKFSmootherResultsQ[assoc_?AssociationQ] := With[{requiredKeys = {
+     "System",
+     "FilteredStates",
+     "SmoothedStates"
+     }},
+  SubsetQ[requiredKeys, Keys[assoc]]
+]
+
+
+(* ::Section:: *)
 (*Predict & Update*)
 
 
 (* UKF Predict Step *)
-UKFPredict[state:{t_?NumericQ, x_List, P_List}, \[CapitalDelta]t_?NumericQ, system:{f_, h_, Q_, R_}] := Module[{f\[Sigma]s, \[Mu], \[CapitalSigma]},
+UKFPredict[state:{t_?NumericQ, x_List, P_List}, \[CapitalDelta]t_?NumericQ, system_?UKFSystemQ] := Module[{f\[Sigma]s, \[Mu], \[CapitalSigma], f, Q},
+	f = system["ProcessModel"]; 
+	Q = system["ProcessNoise"];
 	f\[Sigma]s = UKFSigmaPointsMap[f[#, \[CapitalDelta]t] &, UKFSigmaPoints[state]]; (* Transformed sigma points *)
 	\[Mu] = UKFSigmaPointsMean[f\[Sigma]s]; (* transformed mean *)
 	\[CapitalSigma] = makeHermitian[UKFSigmaPointsCovariance[f\[Sigma]s, \[Mu]] + Q]; (* transformed covariance *)
 	{t + \[CapitalDelta]t, \[Mu], \[CapitalSigma]}
 ];
-UKFPredict[\[CapitalDelta]t_?NumericQ, system:{f_, h_, Q_, R_}][state_]:= UKFPredict[state, \[CapitalDelta]t, system];
+UKFPredict[\[CapitalDelta]t_?NumericQ, system_?UKFSystemQ][state_]:= UKFPredict[state, \[CapitalDelta]t, system];
 
 (* UKF Update Step *)
-UKFUpdate[state:{t_, x_, P_}, measurement:{_, z_}, system:{f_, h_, Q_, R_}] := Module[{\[Sigma]s, h\[Sigma]s, h\[Mu], S, covXZ, K},
+UKFUpdate[state:{t_, x_, P_}, measurement:{_, z_}, system_?UKFSystemQ] := Module[{\[Sigma]s, h\[Sigma]s, h\[Mu], S, covXZ, K, h, R},
+	h = system["MeasurementModel"];
+	R = system["MeasurementNoise"];
 	\[Sigma]s = UKFSigmaPoints[state];
 	h\[Sigma]s = UKFSigmaPointsMap[h, \[Sigma]s];
 	h\[Mu] = UKFSigmaPointsMean[h\[Sigma]s];
@@ -177,15 +237,15 @@ UKFUpdate[state:{t_, x_, P_}, measurement:{_, z_}, system:{f_, h_, Q_, R_}] := M
 		makeHermitian[P - K . S . K\[Transpose]]
 	}
 ]
-UKFUpdate[measurement_, system:{f_, h_, Q_, R_}][state_]:= UKFUpdate[state, measurement, system]
+UKFUpdate[measurement_, system_?UKFSystemQ][state_]:= UKFUpdate[state, measurement, system]
 
 
 (* ::Section:: *)
 (*Filtering*)
 
 
-UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system:{f_, h_, Q_, R_}] := 
-   FoldList[
+UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system_?UKFSystemQ] := Module[{results, dropInterimStates},
+   results = FoldList[
       {state, measurement} |-> With[{\[CapitalDelta]t = measurementTime[measurement] - stateTime[state]},
 	      Composition[
 	          UKFUpdate[measurement, system],
@@ -194,7 +254,14 @@ UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system:{f_, h_, Q_, R
 	  ],
 	  initialEstimate,
 	  measurements
-   ]
+   ];
+   
+   (* If subsequent states have the timestamp, take just the last *)
+   (*   dropInterimStates[states_]:=*)
+   
+   <|"System" -> system, "FilteredStates" -> results|>
+]
+UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}][system_?UKFSystemQ] := UKFFilter[initialEstimate, measurements, system];
 
 
 (* ::Section:: *)
@@ -212,7 +279,9 @@ UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system:{f_, h_, Q_, R
 
 
 (* Could be optimized by saving the sigma points from the forward pass!*)
-UKFBackwardsUpdate[state:{t1_, x_, P_}, nextState:{t2_, \[DoubleStruckX]_, \[DoubleStruckCapitalP]_}, system:{f_, h_, Q_, R_}]:=Module[{\[Sigma]s, f\[Sigma]s, f\[Mu], covXZ, S, C, F, \[CapitalDelta]t},
+UKFBackwardsUpdate[state:{t1_, x_, P_}, subsequentState:{t2_, \[DoubleStruckX]_, \[DoubleStruckCapitalP]_}, system_?UKFSystemQ]:=Module[{\[Sigma]s, f\[Sigma]s, f\[Mu], covXZ, S, C, F, \[CapitalDelta]t, f, Q},
+	f = system["ProcessModel"];
+	Q = system["ProcessNoise"];
 	\[CapitalDelta]t = t2 - t1;
 	\[Sigma]s = UKFSigmaPoints[state]; 
 	f\[Sigma]s = UKFSigmaPointsMap[f[#, \[CapitalDelta]t] &, \[Sigma]s];
@@ -228,10 +297,9 @@ UKFBackwardsUpdate[state:{t1_, x_, P_}, nextState:{t2_, \[DoubleStruckX]_, \[Dou
 	}
 ];
  
-UKFSmoother[initialEstimate:{t_, x_, P_}, measurements:{__}, system:{f_, h_, Q_, R_}] := Module[{intialUpdatedEstimate, forwardPass, backwardPass, forwardPassStates, ForwardPassPredictions, reversePassInput},
-   intialUpdatedEstimate = UKFUpdate[initialEstimate, First[measurements], system];
-  
-   forwardPass = UKFFilter[initialEstimate, measurements, system];
+UKFSmoother[filterResults_?UKFFilterResultsQ] := Module[{system, forwardPass, backwardPass},
+	system = filterResults["System"];
+   forwardPass = filterResults["FilteredStates"];
  
    backwardPass = FoldList[
       {nextState, state} |-> UKFBackwardsUpdate[state, nextState, system],
@@ -239,7 +307,7 @@ UKFSmoother[initialEstimate:{t_, x_, P_}, measurements:{__}, system:{f_, h_, Q_,
 	  Rest[Reverse[forwardPass]]
    ];
    
-   Reverse[backwardPass]
+   Append[filterResults, "SmoothedStates" -> Reverse[backwardPass]]
 ]
 
 
