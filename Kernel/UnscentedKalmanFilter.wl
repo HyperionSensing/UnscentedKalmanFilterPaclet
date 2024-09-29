@@ -122,7 +122,7 @@ UKFSigmaPoints[{___, \[Mu]_, P:{{__?NumericQ}..}}, \[CapitalDelta]:{__?NumericQ}
   n = manifoldDimension[\[Mu]];
   
   If[!PositiveSemidefiniteMatrixQ[P], Abort[]];
-  L = CholeskyDecomposition[3 P]; (* Mathematica returns an _upper_ triangular matrix for L. This is what we want anyway, since we want to map across the columns of the lower triangular transpose.*)
+  L = CholeskyDecomposition[(n + \[Kappa]) P]; (* Mathematica returns an _upper_ triangular matrix for L. This is what we want anyway, since we want to map across the columns of the lower triangular transpose.*)
 
   weights = {\[Kappa]/(n + \[Kappa])} ~Join~ ConstantArray[(1/2)/(n + \[Kappa]), 2 n]; 
   \[Sigma]s = {
@@ -156,6 +156,7 @@ UKFSigmaPointsCrossCovariance[{\[Sigma]sx_, wsx_}, {\[Sigma]sz_, wsz_}, \[Mu]X_,
 ]
 
 UKFSigmaPointsMap[f_, {\[Sigma]s_, ws_}]:= {f/@ \[Sigma]s, ws}
+UKFSigmaPointsMap[f_][\[Sigma]s_]:= UKFSigmaPointsMap[f, \[Sigma]s]
 
 
 
@@ -257,7 +258,7 @@ UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system_?UKFSystemQ] :
    ];
    
    (* If subsequent states have the timestamp, take just the last *)
-   dropInterimStates[states_] := Last/@SplitBy[states, stateTime];
+   dropInterimStates[states_] := Last/@SplitBy[states, N@*stateTime];
    
    <|"System" -> system, "FilteredStates" -> dropInterimStates[results]|>
 ]
