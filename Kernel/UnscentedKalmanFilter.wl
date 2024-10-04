@@ -17,13 +17,16 @@ UKFSigmaPoints[{___, \[Mu], P}, \[CapitalDelta]] := generates {sigma points, wei
 UKFSigmaPoints[{___, \[Mu], P}] generates {sigma points, weights} where \[CapitalDelta] is the zero vector.
 ";
 
-UKFSigmaPointsMean::usage = "UKFSigmaPointsMean[sigmaPoints] calculates the estimated mean of the distribution approximated by a set of sigma points.";
+UKFSigmaPointsMean::usage = "
+UKFSigmaPointsMean[sigmaPoints] calculates the estimated mean of the distribution approximated by a set of sigma points.";
 
-UKFSigmaPointsCovariance::usage = "UKFSigmaPointsCovariance[sigmaPoints, \[Mu]] calculates the estimated covariance of the distribution approximated by a set of sigma points relative to the mean \[Mu]";
+UKFSigmaPointsCovariance::usage = "
+UKFSigmaPointsCovariance[sigmaPoints, \[Mu]] calculates the estimated covariance of the distribution approximated by a set of sigma points relative to the mean \[Mu]. 
+UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}] will automatically calculate the mean";
 
-UKFSigmaPointsCrossCovariance::usage = "UKFSigmaPointsCrossCovariance[sigmaPointsX, sigmaPointsY, \[Mu]X, \[Mu]Y] calculates the estimated cross covariance of the distribution approximated by a two sets of sigma points";
-
-UKFSigmaPointsMap::usage = "UKFSigmaPointsMap[f, sigmaPoints] maps a function f over the set of sigma points";
+UKFSigmaPointsCrossCovariance::usage = "
+UKFSigmaPointsCrossCovariance[sigmaPointsX, sigmaPointsY, \[Mu]X, \[Mu]Y] calculates the estimated cross covariance of the distribution approximated by a two sets of sigma points";
+ 
 
 
 (* ::Subsection:: *)
@@ -147,6 +150,7 @@ UKFSigmaPointsMean[{\[Sigma]s_, ws_}] := With[{w\[Sigma]s = Length[\[Sigma]s] * 
 ]
 
 UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}, \[Mu]_] := UKFSigmaPointsCrossCovariance[{\[Sigma]s, ws}, {\[Sigma]s, ws}, \[Mu], \[Mu]]
+UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}] := UKFSigmaPointsCovariance[{\[Sigma]s, ws}, UKFSigmaPointsMean[{\[Sigma]s, ws}]]
 
 UKFSigmaPointsCrossCovariance[{\[Sigma]sx_, wsx_}, {\[Sigma]sz_, wsz_}, \[Mu]X_, \[Mu]Z_] := With[{
 		D = Transpose[\[Sqrt]wsx Map[(# \[CircleMinus] \[Mu]X) &, \[Sigma]sx]],
