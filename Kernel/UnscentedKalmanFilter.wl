@@ -77,7 +77,7 @@ The argument 'system' is a UKFSystem, see UKFSystemQ";
 Begin["`Private`"]
 
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*Manifolds*)
 
 
@@ -109,7 +109,7 @@ CircleMinus::undefined = "`1`";
 CircleMinus::undefined = "`1`";
 
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*Sigma Points*)
 
 
@@ -279,8 +279,12 @@ UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}][system_?UKFSystemQ] :
 (*To get the mean of our updated distribution, we just use the same equation as the regular Kalman correction, but using the new gain and the mean of state (i+1) instead of the measurement. Using the mean here reveals one additional complication\[LongDash]a measurement is a single value; state (i+1) is a distribution. But this turns out to be easy to deal with: just use the mean of state (i+1) as the measurement, and add the covariance of state (i+1) to the updated variance.  (This latter can be derived from the law of total variance \[Dash] although we must assume that the covariance of the mean of state (i) does not depend on actual value of state (i+1)).*)
 
 
-(* Could be optimized by saving the sigma points from the forward pass!*)
-UKFBackwardsUpdate[state:{t1_, x_, P_}, subsequentState:{t2_, \[DoubleStruckX]_, \[DoubleStruckCapitalP]_}, system_?UKFSystemQ]:=Module[{\[Sigma]s, f\[Sigma]s, f\[Mu], covXZ, S, C, F, \[CapitalDelta]t, f, Q},
+
+(* Returns parameters of the joint distribution Subscript[x, i] and Subscript[x, i+1] conditioned over all the data. This is part of the backwards update of the RTS algorithm where a filtered
+state is smoothed by the future data.  The returned parameters are given as {{Subscript[t, i], Subscript[t, i+1]}, {Subscript[\[Mu], i], Subscript[\[Mu], i+1]}, {{Subscript[V, i,i], Subscript[V, i,i+1], Subscript[V, i+1,i+1]}}.  
+Note that the covariance between the states, Subscript[V, i,i+1], is returned: this is useful for parameter estimation. *)
+(* NB: Could be optimized by saving the sigma points from the forward pass!*)
+UKFBackwardsUpdateTransition[state:{t1_, x_, P_}, subsequentState:{t2_, \[DoubleStruckX]_, \[DoubleStruckCapitalP]_}, system_?UKFSystemQ]:=Module[{\[Sigma]s, f\[Sigma]s, f\[Mu], covXZ, S, C, F, \[CapitalDelta]t, f, Q, X},
 	f = system["ProcessModel"];
 	Q = system["ProcessNoise"];
 	\[CapitalDelta]t = t2 - t1;
@@ -292,11 +296,14 @@ UKFBackwardsUpdate[state:{t1_, x_, P_}, subsequentState:{t2_, \[DoubleStruckX]_,
 	C = covXZ . Inverse[S];
 	
 	{
-	    t1,
-		UKFSigmaPointsMean@UKFSigmaPoints[state, C . (\[DoubleStruckX] - f\[Mu])],
-		makeHermitian[P + C . (\[DoubleStruckCapitalP] - S) . C\[Transpose]]
+	    {t1, t2},
+		{UKFSigmaPointsMean@UKFSigmaPoints[state, C . (\[DoubleStruckX] - f\[Mu])], \[DoubleStruckX]},
+		{makeHermitian[P + C . (\[DoubleStruckCapitalP] - S) . C\[Transpose]], C . \[DoubleStruckCapitalP], \[DoubleStruckCapitalP]}
 	}
 ];
+
+UKFBackwardsUpdate[state:{t1_, x_, P_}, subsequentState:{t2_, \[DoubleStruckX]_, \[DoubleStruckCapitalP]_}, system_?UKFSystemQ] := UKFBackwardsUpdateTransition[state, subsequentState, system][[All,1]]
+
  
 UKFSmoother[filterResults_?UKFFilterResultsQ] := Module[{system, forwardPass, backwardPass},
 	system = filterResults["System"];
@@ -317,7 +324,55 @@ UKFSmoother[filterResults_?UKFFilterResultsQ] := Module[{system, forwardPass, ba
 
 
 (* ::Text:: *)
-(*Estimate the parameters of the filter using expectation maximization*)
+(*Estimate the parameters of the filter using expectation maximization. See "Documentation/English/Kalman Parameter Estimation"*)
+
+
+?UKFSigmaPoints
+
+
+UKFParameterMaximization[parameters_, estimates_?UKFSmootherResultsQ] := Module[{system, fitVariables, \[CapitalDelta]ts, makeSigmaPointsFromTransition, n, destructure, f, xStateSymbols, xSymbols},
+	system = estimates["System"];
+	f = Echo@system["ProcessModel"];
+	
+	If[!TrueQ[Length[estimates["SmoothedStates"]] > 0], Return[system]];
+	n = manifoldDimension[First[estimates["SmoothedStates"]][[2]]];
+	
+	makeSigmaPointsFromTransition[{times_, means_, covars_}] := UKFSigmaPoints[{
+		Flatten[means, 1],	
+		ArrayFlatten[{
+			{covars[[1]], covars[[2]]},
+			{covars[[2]]\[Transpose], covars[[3]]}
+		}]
+	}, 
+	Constant[0, n],
+	0
+	];
+	
+	(* Nonlinear fit assumes scalar y's. To get around this, we flatten out the elements of y into individual data points. We must also add an "index" independent variable so we know what element to take of the function we're fitting. *)
+	destructure[{x_,y_}] := MapIndexed[Prepend[First[#2]][x] -> #1&,y];
+	
+	\[CapitalDelta]ts = Map[stateTime[#[[2]]] - stateTime[#[[1]]] &,  Partition[estimates["SmoothedStates"], 2, 1]];
+	
+	fitVariables = Composition[
+		Flatten,
+		Map[destructure],
+		Flatten[#,1]&,
+		MapThread[{\[CapitalDelta]t, vars} |-> MapAt[Prepend[\[CapitalDelta]t], vars, {All, 1}] , {\[CapitalDelta]ts, #}] &,
+		Map[Composition[
+			#[[1]] * Sqrt[#[[2]]]&, (* Weight each {x, y} point for the nonlinear fit. Note the Sqrt which is required for the estimated value to be correct*)
+			UKFSigmaPointsMap[TakeDrop[#, n] &], (* Each sigma point is mapped to {{Subscript[\[Sigma]z, i]..}, {Subscript[\[Sigma]z, i+1]..}}.  For the nonlinear fit, this is {{x}, {y}} *)
+			makeSigmaPointsFromTransition,
+			UKFBackwardsUpdateTransition[#[[1]], #[[2]], system] &
+		]]
+	]@Transpose[{Most@estimates["FilteredStates"], Rest@estimates["SmoothedStates"]}];
+	
+	xStateSymbols = Table[\[FormalX][i], {i, n}];
+	xSymbols = {\[FormalI], \[FormalT]} ~Join~ xStateSymbols;
+	
+	f[{x1_,v1_},\[CapitalDelta]t_]:= With[{v2 = v1- k x1 \[CapitalDelta]t}, {x1 + v2 \[CapitalDelta]t,  v2} ];
+	
+	NonlinearModelFit[fitVariables, Echo@Evaluate[f[xStateSymbols, \[FormalT]][[\[FormalI]]]], (*parameters*){k}, xSymbols]
+]
 
 
 (* ::Section:: *)
