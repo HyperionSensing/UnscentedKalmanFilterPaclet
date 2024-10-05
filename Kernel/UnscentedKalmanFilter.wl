@@ -186,7 +186,7 @@ UKFSystemQ[system_?AssociationQ] := With[{requiredKeys = {
      "ProcessNoise",
      "MeasurementNoise"
      }},
-  SubsetQ[requiredKeys, Keys[system]] &&
+  SubsetQ[Keys[system], requiredKeys] &&
   MatchQ[system["ProcessNoise"], {{__?NumericQ}..}] &&
   MatchQ[system["MeasurementNoise"], {{__?NumericQ}..}]
 ]
