@@ -58,7 +58,7 @@ The argument 'state' is a list {x, P}, where x is the predicted state estimate a
 The argument 'system' is a UKFSystem, see UKFSystemQ.";
 
 UKFBackwardsUpdate::usage = 
-"UKFBackwardsUpdate[state, subsequentState, system] updates a state conditioned only on previous data given the subsequent state that is conditioned on all data. This is used in the RTS algorithm."
+"UKFBackwardsUpdate[state, subsequentState, system] updates a state conditioned only on previous data given the subsequent state that is conditioned on all data. This is used in the RTS algorithm.";
 
 
 (* ::Subsection:: *)
@@ -113,7 +113,7 @@ CircleMinus::undefined = "`1`";
 CircleMinus::undefined = "`1`";
 
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*Sigma Points*)
 
 
@@ -165,7 +165,7 @@ UKFSigmaPointsMap[f_][\[Sigma]s_]:= UKFSigmaPointsMap[f, \[Sigma]s]
 
 
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*Helpers*)
 
 
@@ -175,6 +175,7 @@ makeHermitian[m_]:= 1/2 (m + m\[Transpose]);
 
 stateTime[{t_, __}] := t
 measurementTime[{t_, __}] := t
+measurementData[{_, x_}] := x 
 
 
 (* ::Section:: *)
@@ -197,7 +198,7 @@ UKFFilterResultsQ[assoc_?AssociationQ] := With[{requiredKeys = {
      "System",
      "FilteredStates"
      }},
-  SubsetQ[requiredKeys, Keys[assoc]]
+  SubsetQ[Keys[assoc], requiredKeys]
 ]
 
 
@@ -206,7 +207,7 @@ UKFSmootherResultsQ[assoc_?AssociationQ] := With[{requiredKeys = {
      "FilteredStates",
      "SmoothedStates"
      }},
-  SubsetQ[requiredKeys, Keys[assoc]]
+  SubsetQ[Keys[assoc], requiredKeys]
 ]
 
 
@@ -243,7 +244,7 @@ UKFUpdate[state:{t_, x_, P_}, measurement:{_, z_}, system_?UKFSystemQ] := Module
 		makeHermitian[P - K . S . K\[Transpose]]
 	}
 ]
-UKFUpdate[measurement_, system_?UKFSystemQ][state_]:= UKFUpdate[state, measurement, system]
+UKFUpdate[measurement_, system_?UKFSystemQ][state_] := UKFUpdate[state, measurement, system]
 
 
 (* ::Section:: *)
@@ -265,7 +266,7 @@ UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}, system_?UKFSystemQ] :
    (* If subsequent states have the timestamp, take just the last *)
    dropInterimStates[states_] := Last/@SplitBy[states, N@*stateTime];
    
-   <|"System" -> system, "FilteredStates" -> dropInterimStates[results]|>
+   <|"System" -> system, "FilteredStates" -> dropInterimStates[results], "Measurements" -> measurements|>
 ]
 UKFFilter[initialEstimate:{t_, x_, P_}, measurements:{__}][system_?UKFSystemQ] := UKFFilter[initialEstimate, measurements, system];
 
@@ -331,10 +332,9 @@ UKFSmoother[filterResults_?UKFFilterResultsQ] := Module[{system, forwardPass, ba
 (*Estimate the parameters of the filter using expectation maximization. See "Documentation/English/Kalman Parameter Estimation"*)
 
 
-UKFParameterMaximization[parameters_, estimates_?UKFSmootherResultsQ] := Module[{f, Q, system, fitVariables, \[CapitalDelta]ts, makeSigmaPointsFromTransition, n, xStateSymbols, xSymbols, fit, bestFitParameters},
+(* The purpose of this function is to make a list of {x:{__}, y:{__}} that the nonlinear fitting procedure will use when trying to do f[x] = y *)
+makeTransitionDataForFit[parameters_, estimates_?UKFSmootherResultsQ] := Module[{system, makeSigmaPointsFromTransition, \[CapitalDelta]ts},
 	system = estimates["System"];
-	f = system["ProcessModel"];
-	Q = system["ProcessNoise"];
 	
 	If[!TrueQ[Length[estimates["SmoothedStates"]] > 0], Return[system]];
 	n = manifoldDimension[First[estimates["SmoothedStates"]][[2]]];
@@ -354,7 +354,7 @@ UKFParameterMaximization[parameters_, estimates_?UKFSmootherResultsQ] := Module[
 	(* Duration of all the transitions *);
 	\[CapitalDelta]ts = Map[stateTime[#[[2]]] - stateTime[#[[1]]] &,  Partition[estimates["SmoothedStates"], 2, 1]];
 	
-	fitVariables = Composition[
+	Composition[
 		Flatten[#, 1] &,
 		
 		(* Add in the duration of each transition. This is needed to use use the process model function. *)
@@ -372,14 +372,59 @@ UKFParameterMaximization[parameters_, estimates_?UKFSmootherResultsQ] := Module[
 		
 		(* Pair up filtered states with their succeeding smoothed state *)
 		Transpose[{Most[#"FilteredStates"], Rest[#"SmoothedStates"]}] & 
-	]@estimates;
+	]@estimates
+]
+
+
+(* The purpose of this function is to make a list of {x:{__}, y:{__}} that the nonlinear fitting procedure will use when trying to do f[x] = y *)
+makeMeasurementDataForFit[parameters_, estimates_?UKFSmootherResultsQ] := Module[{system, dataForMeasurement},
+	system = estimates["System"];
+	
+	(* Get a list of sigma points corresponding to a measurement *)
+	dataForMeasurement[measurement_] := Composition[
+		(* The transition fit data will have a \[CapitalDelta]t prepended to it. That doesn't apply to measurement fit data, but we still need to add a placeholder value there. The NonlinearModelFit we use isn't aware that there are two different kinds of data *)
+		MapAt[Prepend[-1], {All, 1}],
+		
+		(* Weight each {x, y} pair using the sigma point weights \[Dash] similar to what we did for transitions *)
+		#[[1]] * Sqrt[#[[2]]]&,
+		
+		(* Each sigma point will be used as {x, y} data in the fit: map over each sigma point to append the measurement. *)
+		UKFSigmaPointsMap[{#, measurementData[measurement]} &],
+
+		(* Get the state corresponding to this measurement and make a set of sigma points for it *)
+		UKFSigmaPoints[#, ConstantArray[0, manifoldDimension[#[[2]]]], 1] &,
+		SelectFirst[stateTime[#] == measurementTime[measurement] &]	
+	]@estimates["SmoothedStates"];
+	
+	Flatten[dataForMeasurement /@ estimates["Measurements"], 1]
+]
+
+
+UKFParameterMaximization[parameters_, estimates_?UKFSmootherResultsQ] := Module[{f, h, Q, R, system, transitionFitData, measurementFitData, \[CapitalDelta]ts, makeSigmaPointsFromTransition, n, xStateSymbols, xSymbols, fit, bestFitParameters, makeFitDataForMeasurement, allFitData, weights},
+	system = estimates["System"];
+	f = system["ProcessModel"];
+	h = system["MeasurementModel"];
+	Q = system["ProcessNoise"];
+	R = system["MeasurementNoise"];
+	
+	If[!TrueQ[Length[estimates["SmoothedStates"]] > 0], Return[system]];
+	n = manifoldDimension[First[estimates["SmoothedStates"]][[2]]];
+	
+	transitionFitData = makeTransitionDataForFit[parameters, estimates];
+	
+	measurementFitData = makeMeasurementDataForFit[parameters, estimates];
+	
+	(* We use index \[FormalJ] for transition vs measurement data. 1 for transition, 2 for measurement. We also have already prepended time to transition data, so we must append a placeholder to the measurement data as well so that our x values match *);
+	allFitData = Join[MapAt[Prepend[1], transitionFitData, {All, 1}], MapAt[Prepend[2], measurementFitData, {All, 1}]];
 	
 	xStateSymbols = Table[Symbol["\[FormalX]"<>ToString[i]], {i, n}];
-	xSymbols = {\[FormalT]} ~Join~ xStateSymbols;
+	xSymbols = {\[FormalJ], \[FormalT]} ~Join~ xStateSymbols;
 	
-	fit = MultiNonlinearFitModelFit[fitVariables, Q, f[xStateSymbols, \[FormalT]], parameters, xSymbols];
-	bestFitParameters = fit["BestFitParameters"];
-	bestFitParameters
+	weights = ConstantArray[Q, Length@transitionFitData] ~Join~ ConstantArray[R, Length@measurementFitData];
+	
+	fit = MultiNonlinearFitModelFit[allFitData, weights, {f[xStateSymbols, \[FormalT]], h[xStateSymbols]}[[\[FormalJ]]], parameters, xSymbols];
+	bestFitParameters = EchoLabel["Best Fit Params"]@fit["BestFitParameters"];
+	Association[system, "Parameters" -> bestFitParameters]
 ]
 
 
@@ -388,26 +433,27 @@ UKFParameterMaximization[parameters_, estimates_?UKFSmootherResultsQ] := Module[
 
 
 MultiNonlinearFitModelFit::usage = "
-MultiNonlinearFitModelFit[data, Q, form, params, xSymbols] extends NonlinearModelFit to handle the case that the \!\(\*SubscriptBox[\(y\), \(i\)]\) are vectors. It attempts to find parameters that minimize \!\(\*FormBox[\(\*UnderscriptBox[\(\[CapitalSigma]\), \(i\)]\\\ \((\*SubscriptBox[\(y\), \(i\)]\\\  - \\\ f(x))\)\[Transpose]  . \(\*SuperscriptBox[\(Q\), \(-1\)](\*SubscriptBox[\(y\), \(i\(\\\ \)\)] - \\\ f(x))\)\),
-TraditionalForm]\).
+MultiNonlinearFitModelFit[data, weights, form, params, xSymbols] extends NonlinearModelFit to handle the case that the \!\(\*SubscriptBox[\(y\), \(i\)]\) are vectors. It attempts to find parameters that minimize \!\(\*FormBox[\(\*UnderscriptBox[\(\[CapitalSigma]\), \(i\)]\\\ \((\*SubscriptBox[\(y\), \(i\)]\\\  - \\\ f(x))\)\[Transpose]  . \(\*SuperscriptBox[SubscriptBox[\(Q\), \(i\)], \(-1\)](\*SubscriptBox[\(y\), \(i\(\\\ \)\)] - \\\ f(x))\)\),
+TraditionalForm]\) where \!\(\*SubscriptBox[\(Q\), \(i\)]\) is a positive definite weight matrix.
 data should be of the form {{\!\(\*SubscriptBox[\(x\), \(1\)]\), \!\(\*SubscriptBox[\(x\), \(2\)]\), ...}, {\!\(\*SubscriptBox[\(y\), \(1\)]\), \!\(\*SubscriptBox[\(y\), \(2\)]\), ...}}
-"
+";
 MultiNonlinearFitModelFit::QNotDiagonal = "Q is currently assumed to be a diagonal matrix";
-MultiNonlinearFitModelFit::QNotPositiveDefinite = "Q must be postiive definite";
-MultiNonlinearFitModelFit[data_, Q_, form_, params_, xSymbols_] := Module[{weights, destructure, destructuredData, augmentedX},
-	If[!PositiveDefiniteMatrixQ[Q], Message[MultiNonlinearFitModelFit::QNotPositiveDefinite]; Abort[]];
-	
-	(* Currently we assume that Q is diagonal. If we need to relax this, we can use SVD to break apart Q *)
-	If[!DiagonalMatrixQ[Q], Message[MultiNonlinearFitModelFit::QNotDiagonal]; Abort[]];
-	weights = Sqrt[1./Diagonal[Q]];
+MultiNonlinearFitModelFit::QNotPositiveDefinite = "Q must be postive definite";
+MultiNonlinearFitModelFit[data_, weights_, form_, params_, xSymbols_] := Module[{destructure, destructuredData, augmentedX, flattenedWeights},
+	If[!AllTrue[weights, PositiveDefiniteMatrixQ], Message[MultiNonlinearFitModelFit::QNotPositiveDefinite]; Abort[]];
 	
 	(* Nonlinear fit assumes scalar y's. To get around this, we flatten out the elements of y into individual data points. We must also add an "index" independent variable so we know what element to take of the function we're fitting. *)
-	destructure[{x_, y_}] := MapIndexed[Prepend[First[#2]][x] -> #1&, weights*y];
+	destructure[{x_, y_}] := MapIndexed[Prepend[First[#2]][x] -> #1 &, y];
 	destructuredData = Flatten[destructure /@ data];
+	
+	(* Flatten the weights too *)
+	(* Currently we assume that all the Q is diagonal. If we need to relax this, we can use SVD to break apart Q *)
+	If[!AllTrue[weights, DiagonalMatrixQ], Message[MultiNonlinearFitModelFit::QNotDiagonal]; Abort[]];
+	flattenedWeights = Flatten[Map[1./Diagonal[#] &, weights]];
 	
 	augmentedX = {\[FormalI]} ~Join~ xSymbols;
 	
-	NonlinearModelFit[destructuredData, (weights*form)[[\[FormalI]]], params, augmentedX]
+	NonlinearModelFit[destructuredData, form[[\[FormalI]]], params, augmentedX, Weights -> flattenedWeights]
 ]
 
 
