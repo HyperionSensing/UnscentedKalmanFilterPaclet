@@ -166,13 +166,14 @@ defaultSigmaPointK[{___, \[Mu]_, P_}] := 3 - manifoldDimension[\[Mu]] (* n + k =
 UKFSigmaPoints[s_, \[CapitalDelta]:{__?NumericQ}] := UKFSigmaPoints[s, \[CapitalDelta], defaultSigmaPointK[s]] 
 UKFSigmaPoints[s:{___, \[Mu]_, P_}] := UKFSigmaPoints[s, ConstantArray[0, manifoldDimension[\[Mu]]], defaultSigmaPointK[s]]
 
-UKFSigmaPointsMean[{\[Sigma]s_, ws_}] := With[{w\[Sigma]s = Length[\[Sigma]s] * ws * \[Sigma]s (* Weighted \[Sigma]s.  Multiply by Length so we can use Mean below *) },	
+UKFSigmaPointsMean[{\[Sigma]s_, ws_}] := 
 	FixedPoint[
-		\[Mu]i |-> \[Mu]i \[CirclePlus] Mean[(# \[CircleMinus] \[Mu]i) &/@ w\[Sigma]s], (* Using total instead of mean hangs? *)
-		First[w\[Sigma]s], 
-		SameTest -> (Norm[N[#1-#2]] < 1*^-6 &)
+		(* Using Total instaed of Mean hangs \[Dash] not sure why. So Is cale by length so we can use Mean *)
+		\[Mu]i |-> \[Mu]i \[CirclePlus] Mean[Length[\[Sigma]s]*MapThread[{\[Sigma], w} |-> w*(\[Sigma] \[CircleMinus] \[Mu]i) , {\[Sigma]s, ws}]], 
+		First[\[Sigma]s], 
+		15,
+		SameTest -> (Norm[N[#1 \[CircleMinus] #2]] < 1*^-6 &)
 	]
-]
 
 UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}, \[Mu]_] := UKFSigmaPointsCrossCovariance[{\[Sigma]s, ws}, {\[Sigma]s, ws}, \[Mu], \[Mu]]
 UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}] := UKFSigmaPointsCovariance[{\[Sigma]s, ws}, UKFSigmaPointsMean[{\[Sigma]s, ws}]]
