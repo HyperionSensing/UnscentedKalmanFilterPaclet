@@ -1,13 +1,13 @@
 (* ::Package:: *)
 
-(* ::Section:: *)
+(* ::Section::Closed:: *)
 (*Package Header*)
 
 
 BeginPackage["UnscentedKalmanFilter`"]
 
 
-(* ::Subsection:: *)
+(* ::Subsection::Closed:: *)
 (*Sigma Points*)
 
 
@@ -97,7 +97,7 @@ UKFParameterMaximization[estimates] maximizes all parameters in the system, cond
 Begin["`Private`"]
 
 
-(* ::Section:: *)
+(* ::Section::Closed:: *)
 (*Manifolds*)
 
 
@@ -140,15 +140,16 @@ CircleMinus::undefined = "`1`";
 UKFSigmaPoints[{___, \[Mu]_, P:{{__?NumericQ}..}}, \[CapitalDelta]:{__?NumericQ}, \[Kappa]_?NumericQ] := Module[
   {n, L, xVec, sigmaPointsVec, sigmaPoints, weights, \[Sigma]s},
   n = manifoldDimension[\[Mu]];
-  
-  If[!PositiveSemidefiniteMatrixQ[P], Abort[]];
+
+  (* Diregard the positive semidefinite matrix check. We now recover from it below. It doesn't seem possible to always avoid it. *)  
+  (*If[!PositiveSemidefiniteMatrixQ[P], Message[UKFSigmaPoints::notPositiveSemidefinite]; Abort[]];*)
   L = CholeskyDecomposition[(n + \[Kappa]) P]; (* Mathematica returns an _upper_ triangular matrix for L. This is what we want anyway, since we want to map across the columns of the lower triangular transpose.*)
   
   If[!MatrixQ[L], 
 	(* Cholsky decomposition failed! One of the eigenvalues must be equal to 0 within numerical precision. *)
 	(* We can still handle this case \[Dash] it just means we have no uncertainty in a certain direction. My quick solution is to use SVD to find the conjugate axes instead, see https://en.wikipedia.org/wiki/Cholesky_decomposition#Geometric_interpretation*)
 	L = With[{svd = SingularValueDecomposition[(n + \[Kappa]) P]},
-		Sqrt[Diagonal[svd[[2]]]]*svd[[1]]
+		Sqrt[Diagonal[Clip[svd[[2]], {0, \[Infinity]}]]]*svd[[1]]
 	]
   ];
 
@@ -171,7 +172,7 @@ UKFSigmaPointsMean[{\[Sigma]s_, ws_}] :=
 		(* Using Total instaed of Mean hangs \[Dash] not sure why. So Is cale by length so we can use Mean *)
 		\[Mu]i |-> \[Mu]i \[CirclePlus] Mean[Length[\[Sigma]s]*MapThread[{\[Sigma], w} |-> w*(\[Sigma] \[CircleMinus] \[Mu]i) , {\[Sigma]s, ws}]], 
 		First[\[Sigma]s], 
-		15,
+		5,
 		SameTest -> (Norm[N[#1 \[CircleMinus] #2]] < 1*^-6 &)
 	]
 
@@ -188,6 +189,7 @@ UKFSigmaPointsCrossCovariance[{\[Sigma]sx_, wsx_}, {\[Sigma]sz_, wsz_}, \[Mu]X_,
 UKFSigmaPointsMap[f_, {\[Sigma]s_, ws_}]:= {f/@ \[Sigma]s, ws}
 UKFSigmaPointsMap[f_][\[Sigma]s_]:= UKFSigmaPointsMap[f, \[Sigma]s]
 
+UKFSigmaPoints::notPositiveSemidefinite = "The variance matrix isn't positive semidefinite";
 
 
 (* ::Section:: *)
@@ -266,6 +268,7 @@ UKFUpdate[state:{t_, x_, P_}, measurement:{_, z_}, system_?UKFSystemQ] := Module
 	{
 		t, 
 		UKFSigmaPointsMean@UKFSigmaPoints[state, (* \[CapitalDelta]: *) K . (z - h\[Mu])],
+		(*makeHermitian[EchoLabel["P"][P] - EchoLabel["K"][K] . EchoLabel["S"][S] . K\[Transpose]]*)
 		makeHermitian[P - K . S . K\[Transpose]]
 	}
 ]
@@ -327,7 +330,7 @@ UKFBackwardsUpdateTransition[state:{t1_, x_, P_}, subsequentState:{t2_, \[Double
 	
 	{
 	    {t1, t2},
-		{UKFSigmaPointsMean@UKFSigmaPoints[state, C . (\[DoubleStruckX] - f\[Mu])], \[DoubleStruckX]},
+		{UKFSigmaPointsMean@UKFSigmaPoints[state, C . (\[DoubleStruckX] \[CircleMinus] f\[Mu])], \[DoubleStruckX]},
 		{makeHermitian[P + C . (\[DoubleStruckCapitalP] - S) . C\[Transpose]], C . \[DoubleStruckCapitalP], \[DoubleStruckCapitalP]}
 	}
 ];
@@ -388,7 +391,7 @@ makeTransitionDataForFit[estimates_?UKFSmootherResultsQ] := Module[{system, make
 		
 		(* Expected Output: {{{{x_List, y_List}..}, weights_List}..} *)
 		Map[Composition[
-			UKFSigmaPointsMap[TakeDrop[#, n] &], (* Each sigma point is mapped to {{Subscript[\[Sigma]z, i]..}, {Subscript[\[Sigma]z, i+1]..}}.  For the nonlinear fit, this is {{x}, {y}} *)
+			UKFSigmaPointsMap[TakeDrop[#, Length[#]/2] &], (* Each sigma point is mapped to {{Subscript[\[Sigma]z, i]..}, {Subscript[\[Sigma]z, i+1]..}}.  For the nonlinear fit, this is {{x}, {y}} *)
 			
 			(* Create sigma points for the joint transition *)
 			makeSigmaPointsFromTransition,
