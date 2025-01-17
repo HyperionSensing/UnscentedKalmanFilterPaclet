@@ -1,13 +1,13 @@
 (* ::Package:: *)
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*Package Header*)
 
 
 BeginPackage["UnscentedKalmanFilter`"]
 
 
-(* ::Subsection::Closed:: *)
+(* ::Subsection:: *)
 (*Sigma Points*)
 
 
@@ -33,6 +33,13 @@ UKFSigmaPointsCrossCovariance::usage = "
 UKFSigmaPointsCrossCovariance[sigmaPointsX, sigmaPointsY, \[Mu]X, \[Mu]Y] calculates the estimated cross covariance of the distribution approximated by a two sets of sigma points";
  
  
+
+
+(* ::Subsection:: *)
+(*Manifold Elements*)
+
+
+UKFRotationMatrix::usage = "Represents a point in SO3";
 
 
 (* ::Subsection:: *)
@@ -97,7 +104,7 @@ UKFParameterMaximization[estimates] maximizes all parameters in the system, cond
 Begin["`Private`"]
 
 
-(* ::Section::Closed:: *)
+(* ::Section:: *)
 (*Manifolds*)
 
 
@@ -127,6 +134,33 @@ CircleMinus[x_, y_] := Module[{msg},
 (* Messages *)
 CircleMinus::undefined = "`1`";
 CircleMinus::undefined = "`1`";
+
+
+(* ::Subsection:: *)
+(*UKFRotationMatrix*)
+
+
+CirclePlus[x:UKFRotationMatrix[mR_], delta_]:=If[delta=={0,0,0},x,UKFRotationMatrix[RotationMatrix[Norm[delta],delta] . mR ]];
+
+CircleMinus[UKFRotationMatrix[mRx_], UKFRotationMatrix[mRy_]]:= Module[{\[ScriptCapitalR], A,normA, log\[ScriptCapitalR]},
+\[ScriptCapitalR] = mRx . mRy\[Transpose];
+A = 1/2 (\[ScriptCapitalR]-\[ScriptCapitalR]\[Transpose]);
+normA = Sqrt[-1/2 Tr[A . A]];
+log\[ScriptCapitalR]=If[normA==0,1,ArcSin[normA]/normA]A;
+{log\[ScriptCapitalR][[3,2]],log\[ScriptCapitalR][[1,3]],log\[ScriptCapitalR][[2,1]]}
+]
+
+UKFRotationMatrix[mR_][v_]:=mR . v
+
+UKFRotationMatrix/:Plus[UKFRotationMatrix[r1_],UKFRotationMatrix[r2_]]:=UKFRotationMatrix[r2 . r1]
+
+
+(* ::Input:: *)
+(*UKFRotationMatrix[RotationMatrix[3,{2,3,4}]] \[CirclePlus] {1.3,0,0}*)
+
+
+(* ::Input:: *)
+(*Out[21]\[CircleMinus] UKFRotationMatrix[RotationMatrix[3,{2,3,4}]]//Chop*)
 
 
 (* ::Section:: *)
@@ -176,7 +210,7 @@ UKFSigmaPointsMean[{\[Sigma]s_, ws_}] :=
 		SameTest -> (Norm[N[#1 \[CircleMinus] #2]] < 1*^-6 &)
 	]
 
-UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}, \[Mu]_] := UKFSigmaPointsCrossCovariance[{\[Sigma]s, ws}, {\[Sigma]s, ws}, \[Mu], \[Mu]]
+UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}, \[Mu]_] := makeHermitian@UKFSigmaPointsCrossCovariance[{\[Sigma]s, ws}, {\[Sigma]s, ws}, \[Mu], \[Mu]]
 UKFSigmaPointsCovariance[{\[Sigma]s_, ws_}] := UKFSigmaPointsCovariance[{\[Sigma]s, ws}, UKFSigmaPointsMean[{\[Sigma]s, ws}]]
 
 UKFSigmaPointsCrossCovariance[{\[Sigma]sx_, wsx_}, {\[Sigma]sz_, wsz_}, \[Mu]X_, \[Mu]Z_] := With[{
